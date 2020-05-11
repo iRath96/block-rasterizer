@@ -1,11 +1,6 @@
 # Minecraft Block Rasterizer
 <center>
-<img width="64" src="demo/beacon.png" />
-<img width="64" src="demo/tnt.png" />
-<img width="64" src="demo/lectern.png" />
-<img width="64" src="demo/campfire.png" />
-<img width="64" src="demo/brewing_stand.png" />
-<img width="64" src="demo/comparator.png" />
+<img height="64" src="demo/banner.png" />
 </center>
 
 This lightweight library produces images of blocks using Minecrafts block model files.
