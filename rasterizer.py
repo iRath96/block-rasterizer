@@ -161,6 +161,11 @@ class Rasterizer(object):
         return Image.fromarray(image)
         
     def render_part(self, blockstate, image, zbuffer):
+        if isinstance(blockstate, list):
+            # @todo why?
+            self.render_part(blockstate[0], image, zbuffer)
+            return
+
         global_matrix = numpy.eye(3)
         for axis in ["x", "y", "z"]:
             if axis in blockstate:
@@ -210,7 +215,18 @@ class Rasterizer(object):
             for side_name, side_data in element["faces"].items():
                 quad = self.cube_faces[side_name]
                 quad = numpy.array([ numpy.diag(points[v]) for v in quad ]).transpose()
-                uv = side_data.get("uv", [ 0, 0, 16, 16 ]) # TODO ???
+                uv = side_data.get("uv", None)
+                if not uv:
+                    # taken from https://github.com/DragonDev1906/Minecraft-Overviewer/
+                    _from, _to = element["from"], element["to"]
+                    uv = {
+                        "north": (_to  [0], 16-_to[1], _from[0], 16-_from[1]),
+                        "east":  (_from[2], 16-_to[1], _to  [2], 16-_from[1]),
+                        "south": (_from[0], 16-_to[1], _to  [0], 16-_from[1]),
+                        "west":  (_from[2], 16-_to[1], _to  [2], 16-_from[1]),
+                        "up":    (_from[0], _from [2], _to  [0], _to     [2]),
+                        "down":  (_to  [0], _from [2], _from[0], _to     [2]),
+                    }[side_name]
 
                 # apply transformations
                 quad = numpy.matmul(local_matrix, quad) + local_shift
