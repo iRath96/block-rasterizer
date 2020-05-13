@@ -4,13 +4,31 @@ import numpy
 from io import BytesIO
 from PIL import Image, ImageEnhance, ImageOps, ImageDraw
 
+class JarFileProvider(object):
+    def __init__(self, jar_path):
+        self.jar = zipfile.ZipFile(jar_path)
+    
+    def find_file(self, filename):
+        return self.jar.open(filename)
+
+    def load_json(self, filename):
+        fileobj = self.find_file(filename)
+        data = json.load(fileobj)
+        return data
+
+    def load_image(self, filename):
+        fileobj = self.find_file(filename)
+        buffer = BytesIO(fileobj.read())
+        img = Image.open(buffer).convert("RGBA")
+        return img
+
 class Rasterizer(object):
-    def __init__(self, minecraft_jar, dimensions=(24, 24)):
-        self.jar = zipfile.ZipFile(minecraft_jar)
+    def __init__(self, file_provider, dimensions=(24, 24)):
+        self.file_provider = file_provider
         self.bgcolor = (26, 26, 26, 0)
         self.texture_dimensions = dimensions
 
-        self.light_vector  = numpy.array([ -0.7, +1.2, +0.6 ])
+        self.light_vector  = numpy.array([ -0.8, +1.0, +0.7 ])
         #self.light_vector /= numpy.linalg.norm(self.light_vector)
 
         self.projection = numpy.array([
@@ -50,23 +68,6 @@ class Rasterizer(object):
             name = name[10:]
         return name
 
-    def get_file(self, filename):
-        self.jar.getinfo(filename)
-        return self.jar.open(filename)
-    
-    def load_json(self, filename):
-        fileobj = self.get_file(filename)
-        return json.load(fileobj)
-
-    def load_texture(self, name):
-        fileobj = self.get_file("assets/minecraft/textures/%s.png" % self.remove_namespace(name))
-        buffer = BytesIO(fileobj.read())
-        img = Image.open(buffer).convert("RGBA")
-        return img
-    
-    def load_model(self, name):
-        return self.load_json("assets/minecraft/models/%s.json" % self.remove_namespace(name))
-    
     def render_quad(self, image, zbuffer, texture, uv, uv_matrix, points):
         # extended version of https://gist.github.com/seece/4b170e21ccd3aa12e747b7702464a727
 
@@ -131,7 +132,7 @@ class Rasterizer(object):
 
         return matrix
 
-    def render_block(self, block_name, variant=""):
+    def render_block(self, block_name, variant="", props={}):
         image = numpy.zeros((
             self.texture_dimensions[0] * self.texture_dimensions[1],
             4
@@ -141,20 +142,23 @@ class Rasterizer(object):
             self.texture_dimensions[0] * self.texture_dimensions[1]
         ))
 
-        blockstates = self.load_json("assets/minecraft/blockstates/%s.json" % block_name)
+        blockstates = self.file_provider.load_json(
+            "assets/minecraft/blockstates/%s.json" % block_name
+        )
+
         if "variants" in blockstates:
             blockstate = blockstates["variants"][variant]
-            self.render_part(blockstate, image, zbuffer)
+            self.render_part(blockstate, image, zbuffer, props)
         elif "multipart" in blockstates:
             state = dict((x.split("=") for x in variant.split(",")))
             for part in blockstates["multipart"]:
                 if all((state[k] == v for (k,v) in part.get("when", {}).items())):
-                    self.render_part(part["apply"], image, zbuffer)
+                    self.render_part(part["apply"], image, zbuffer, props)
 
         image = image.reshape((*self.texture_dimensions, 4))
         return Image.fromarray(image)
         
-    def render_part(self, blockstate, image, zbuffer):
+    def render_part(self, blockstate, image, zbuffer, props):
         if isinstance(blockstate, list):
             # @todo why?
             self.render_part(blockstate[0], image, zbuffer)
@@ -178,7 +182,10 @@ class Rasterizer(object):
         
         model_name = blockstate["model"]
         while True:
-            model = self.load_model(model_name)
+            model = self.file_provider.load_json(
+                "assets/minecraft/models/%s.json" % self.remove_namespace(model_name)
+            )
+
             if "textures" in model:
                 textures.update({
                     k: resolve_texture(v)
@@ -190,6 +197,9 @@ class Rasterizer(object):
                 model_name = model["parent"]
             else:
                 break
+
+        if model_name == "block/cube":
+            props["solid"] = True
 
         if "elements" not in model:
             raise KeyError("'%s' does not have a model" % model_name)
@@ -228,8 +238,11 @@ class Rasterizer(object):
                 quad = numpy.matmul(global_matrix, quad) + global_shift
                 quad = quad.transpose() / 16 # scale down to [0;1] range
 
-                texture = resolve_texture(side_data["texture"])
-                texture = numpy.asarray(self.load_texture(texture))
+                texture = numpy.asarray(self.file_provider.load_image(
+                    "assets/minecraft/textures/%s.png" % self.remove_namespace(
+                        resolve_texture(side_data["texture"])
+                    )
+                ))
 
                 uv_rotation = side_data.get("rotation", 0)/180*numpy.pi
                 cos, sin = numpy.cos(uv_rotation), numpy.sin(uv_rotation)
