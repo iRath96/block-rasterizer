@@ -161,7 +161,7 @@ class Rasterizer(object):
     def render_part(self, blockstate, image, zbuffer, props):
         if isinstance(blockstate, list):
             # @todo why?
-            self.render_part(blockstate[0], image, zbuffer)
+            self.render_part(blockstate[0], image, zbuffer, props)
             return
 
         global_matrix = self.global_matrix
