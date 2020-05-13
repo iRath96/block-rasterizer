@@ -169,7 +169,7 @@ class Rasterizer(object):
             if axis in blockstate:
                 global_matrix = numpy.matmul(
                     global_matrix,
-                    self.rotation_matrix(axis, blockstate[axis])
+                    self.rotation_matrix(axis, -blockstate[axis])
                 )
         global_shift = numpy.matmul(
             numpy.eye(3) - global_matrix,
