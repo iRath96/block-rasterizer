@@ -10,7 +10,7 @@ class Rasterizer(object):
         self.bgcolor = (26, 26, 26, 0)
         self.texture_dimensions = dimensions
 
-        self.light_vector  = numpy.array([ -0.8, +1.0, +0.7 ])
+        self.light_vector  = numpy.array([ -0.7, +1.2, +0.6 ])
         #self.light_vector /= numpy.linalg.norm(self.light_vector)
 
         self.projection = numpy.array([
@@ -19,13 +19,16 @@ class Rasterizer(object):
             [    0,    1,    0 ]
         ])
 
+        self.global_matrix = numpy.eye(3)
+        #self.global_matrix = self.rotation_matrix("y", 180)
+
         self.cube_faces = {
             "up":    [ numpy.array(v) for v in ([0,1,0], [1,1,0], [0,1,1]) ],
             "down":  [ numpy.array(v) for v in ([0,0,1], [1,0,1], [0,0,0]) ],
             "north": [ numpy.array(v) for v in ([1,1,0], [0,1,0], [1,0,0]) ],
-            "east":  [ numpy.array(v) for v in ([0,1,0], [0,1,1], [0,0,0]) ],
+            "west":  [ numpy.array(v) for v in ([0,1,0], [0,1,1], [0,0,0]) ],
             "south": [ numpy.array(v) for v in ([0,1,1], [1,1,1], [0,0,1]) ],
-            "west":  [ numpy.array(v) for v in ([1,1,1], [1,1,0], [1,0,1]) ],
+            "east":  [ numpy.array(v) for v in ([1,1,1], [1,1,0], [1,0,1]) ],
         }
 
         # Create a grid of sampling positions
@@ -64,7 +67,7 @@ class Rasterizer(object):
     def load_model(self, name):
         return self.load_json("assets/minecraft/models/%s.json" % self.remove_namespace(name))
     
-    def render_quad(self, image, zbuffer, texture, uv, uv_rotation, points):
+    def render_quad(self, image, zbuffer, texture, uv, uv_matrix, points):
         # extended version of https://gist.github.com/seece/4b170e21ccd3aa12e747b7702464a727
 
         shift = numpy.array([0, 3/4, 1/4])
@@ -91,22 +94,12 @@ class Rasterizer(object):
         w1 = edgefunc(d[:,0,:], d[:,2,:], self.img_grid) / area
 
         # calculate texture coordinates
-        u, v = w1, w0
-        if uv_rotation == 0:
-            pass
-        elif uv_rotation == 90:
-            u, v = v, u
-        elif uv_rotation == 180:
-            u, v = 1-u, 1-v
-        elif uv_rotation == 270:
-            u, v = 1-v, 1-u
-        else:
-            raise KeyError("unknown uv rotation")
+        texcoords = numpy.matmul(uv_matrix, numpy.stack([ w1, w0 ]) - 0.5) + 0.5
 
         # map to pixel coordinates
-        u = numpy.clip((uv[0] + u * (uv[2] - uv[0])).astype(numpy.int), 0, texture.shape[1]-1)
-        v = numpy.clip((uv[1] + v * (uv[3] - uv[1])).astype(numpy.int), 0, texture.shape[0]-1)
-        tex = texture[v,u,:]
+        upix = numpy.clip((uv[0] + texcoords[0,:] * (uv[2] - uv[0])).astype(numpy.int), 0, texture.shape[1]-1)
+        vpix = numpy.clip((uv[1] + texcoords[1,:] * (uv[3] - uv[1])).astype(numpy.int), 0, texture.shape[0]-1)
+        tex = texture[vpix,upix,:]
 
         # calculate depth
         z = (1 - w0 - w1) * d[0,0,2] + w0 * d[0,2,2] + w1 * d[0,1,2]
@@ -120,19 +113,21 @@ class Rasterizer(object):
         image[:,3][mask] = 255
         zbuffer[mask] = z[mask]
 
-    def rotation_matrix(self, axis, degree, off=0):
+        return True
+
+    def rotation_matrix(self, axis, degree):
         angle = degree / 180 * numpy.pi
         cos, sin = numpy.cos(angle), numpy.sin(angle)
-        axis0 = ({"x":1, "y": 2, "z": 0}[axis] + off) % 3
+        axis0 = { "x": 0, "y": 1, "z": 2 }[axis]
         axis1 = (axis0 + 1) % 3
         axis2 = (axis0 + 2) % 3
 
         matrix = numpy.zeros((3, 3))
-        matrix[axis0,axis0] = cos
+        matrix[axis0,axis0] = 1
         matrix[axis1,axis1] = cos
-        matrix[axis1,axis0] = -sin
-        matrix[axis0,axis1] = sin
-        matrix[axis2,axis2] = 1
+        matrix[axis1,axis2] = -sin
+        matrix[axis2,axis1] = +sin
+        matrix[axis2,axis2] = cos
 
         return matrix
 
@@ -157,7 +152,6 @@ class Rasterizer(object):
                     self.render_part(part["apply"], image, zbuffer)
 
         image = image.reshape((*self.texture_dimensions, 4))
-        #image = (zbuffer.reshape(self.texture_dimensions) * 255).astype(numpy.uint8)
         return Image.fromarray(image)
         
     def render_part(self, blockstate, image, zbuffer):
@@ -166,7 +160,7 @@ class Rasterizer(object):
             self.render_part(blockstate[0], image, zbuffer)
             return
 
-        global_matrix = numpy.eye(3)
+        global_matrix = self.global_matrix
         for axis in ["x", "y", "z"]:
             if axis in blockstate:
                 global_matrix = numpy.matmul(
@@ -206,7 +200,8 @@ class Rasterizer(object):
             # elements can have custom rotation
             local_matrix, local_shift = numpy.eye(3), 0
             if "rotation" in element:
-                local_matrix = self.rotation_matrix(element["rotation"]["axis"], -element["rotation"]["angle"], 0)
+                axis, angle = element["rotation"]["axis"], element["rotation"]["angle"]
+                local_matrix = self.rotation_matrix(axis, angle)
                 local_shift = numpy.matmul(
                     numpy.eye(3) - local_matrix,
                     numpy.array(element["rotation"]["origin"])
@@ -235,5 +230,12 @@ class Rasterizer(object):
 
                 texture = resolve_texture(side_data["texture"])
                 texture = numpy.asarray(self.load_texture(texture))
+
+                uv_rotation = side_data.get("rotation", 0)/180*numpy.pi
+                cos, sin = numpy.cos(uv_rotation), numpy.sin(uv_rotation)
+                uv_matrix = numpy.array([
+                    [  cos, sin ],
+                    [ -sin, cos ]
+                ])
                 
-                self.render_quad(image, zbuffer, texture, uv, side_data.get("rotation", 0), quad)
+                self.render_quad(image, zbuffer, texture, uv, uv_matrix, quad)
